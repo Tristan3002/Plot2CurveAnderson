@@ -167,6 +167,8 @@ def simulate_promoters(promoters_dict):
 
 # --- Run initial simulation for chosen_promoters
 df = simulate_promoters(chosen_promoters)
+uniq_proms = sorted(df["Promoter"].unique())
+print(f"Simulated promoters ({len(uniq_proms)}): " + ", ".join(uniq_proms[:10]) + (" …" if len(uniq_proms) > 10 else ""))
 
 # --- Save CSV ---
 df.to_csv("promoter_dynamics.csv", index=False)
@@ -227,30 +229,29 @@ def plot_overlay_two_promoters(df, p1, p2):
     plt.show()
 
 # === NEW: One clean comparison plot (all promoters together) ===
-def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True, top_n=None):
+def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True,
+                               top_n=None, logy=False):
     """
     One figure with all promoters together.
-    - If top_n is set, keeps the top_n promoters by final protein level (reduces clutter).
+    - If top_n is set, keeps the top_n promoters by final protein level.
+    - logy=True will use log scale on y-axes (useful when strengths vary widely).
     """
     # choose promoters
     all_proms = sorted(df["Promoter"].unique())
-    if promoters is None:
-        promoters = all_proms
-    else:
-        promoters = [p for p in promoters if p in all_proms]
+    promoters = all_proms if (promoters is None) else [p for p in promoters if p in all_proms]
 
     if top_n is not None and top_n < len(promoters):
-        # keep top_n by endpoint protein
         end = df.sort_values("Time_s").groupby("Promoter")["Protein_molecules"].last()
-        keep = end.loc[promoters].sort_values(ascending=False).head(top_n).index.tolist()
-        promoters = keep
+        promoters = end.loc[promoters].sort_values(ascending=False).head(top_n).index.tolist()
 
     if not promoters:
         print("No promoters to plot.")
         return
 
-    # color map consistent across panels
-    palette = plt.cm.tab20(np.linspace(0, 1, max(3, len(promoters))))
+    print(f"Plotting {len(promoters)} promoters: " +
+          ", ".join(promoters[:10]) + (" …" if len(promoters) > 10 else ""))
+
+    palette = plt.get_cmap('tab20')(np.linspace(0, 1, max(3, len(promoters))))
     color_map = {p: palette[i % len(palette)] for i, p in enumerate(promoters)}
 
     n_rows = 2 if (show_mrna and show_protein) else 1
@@ -264,6 +265,7 @@ def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=
             g = df[df["Promoter"] == p].sort_values("Time_s")
             ax.plot(g["Time_s"], g["mRNA_molecules"], lw=1.3, alpha=0.9, label=p, color=color_map[p])
         ax.set_ylabel("mRNA (molecules/cell)")
+        if logy: ax.set_yscale("log")
         ax.grid(True, alpha=0.25)
         ax.set_title("All promoters — overlay (mRNA and protein)")
 
@@ -274,12 +276,12 @@ def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=
             axp.plot(g["Time_s"], g["Protein_molecules"], lw=1.3, alpha=0.9, label=p, color=color_map[p])
         axp.set_ylabel("Protein (molecules/cell)")
         axp.set_xlabel("Time (s)")
+        if logy: axp.set_yscale("log")
         axp.grid(True, alpha=0.25)
 
-    # single shared legend to the right
     handles, labels = axes[-1].get_legend_handles_labels()
     fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.)
-    fig.tight_layout(rect=[0, 0, 0.84, 1])
+    fig.tight_layout(rect=(0, 0, 0.84, 1))
     plt.show()
 
 # Quicklook after simulation (first 1–2 promoters)
@@ -327,5 +329,12 @@ try:
 except EOFError:
     allplot_in = ""
 if allplot_in in ("y", "yes"):
-    # tip: set top_n (e.g., 8) if the figure is too busy
-    plot_all_promoters_overlay(df, promoters=list(chosen_promoters.keys()), show_mrna=True, show_protein=True, top_n=None)
+    # backfill so df really has *all* library entries
+    current = set(df["Promoter"].unique())
+    missing = [k for k in promoter_strengths if k not in current]
+    if missing:
+        df = pd.concat([df, simulate_promoters({k: promoter_strengths[k] for k in missing})],
+                       ignore_index=True)
+    # Tip: set top_n (e.g., 8) or logy=True if the figure is too busy / scales vary
+    plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True,
+                               top_n=None, logy=False)
