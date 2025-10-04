@@ -88,7 +88,7 @@ k_init_max = 1.0               # s^-1 per mRNA (strong RBS ceiling)
 beta = compute_k_eff(cds_len_nt, aa_per_sec, ribosome_footprint_nt, binding_prob, k_init_max)
 
 # --- Promoter library (expanded) ---
-promoter_strengths = {  # relative multipliers of k_tx_baseline
+promoter_strengths = {
     "J23100": 1.0, "J23101": 0.7, "J23102": 0.86, "J23103": 0.01, "J23104": 0.72,
     "J23105": 0.24, "J23106": 0.47, "J23107": 0.36, "J23108": 0.51, "J23109": 0.04,
     "J23110": 0.33, "J23111": 0.58, "J23112": 0.00, "J23113": 0.01, "J23114": 0.10,
@@ -100,9 +100,8 @@ promoter_strengths = {  # relative multipliers of k_tx_baseline
 try:
     user_in = input('Enter promoters to test (comma-separated, e.g., "J23100,J23105"; empty = all): ').strip()
 except EOFError:
-    user_in = ""  # environments without stdin
+    user_in = ""
 
-# accept "all"/"*", and print what we'll do
 if user_in:
     if user_in.lower() in ("all", "*"):
         chosen_promoters = promoter_strengths
@@ -127,7 +126,6 @@ alpha = np.log(2)/doubling_time
 k_tx_baseline = 0.02  # ~1 transcript every 50 s for baseline promoter
 
 t_max = 1000
-# Adaptive dt (cap at 5 s); include the final point at 1000 s
 dt = min(5.0, 0.02 / min(mRNA_decay, alpha))
 time = np.arange(0, t_max + dt, dt)
 
@@ -136,9 +134,9 @@ def simulate_promoters(promoters_dict):
     """Return a dataframe of timecourses for the supplied promoters."""
     recs = []
     for promoter, rel_strength in promoters_dict.items():
-        m = np.zeros_like(time, dtype=float)  # mRNA molecules per cell
-        p = np.zeros_like(time, dtype=float)  # protein molecules per cell
-        k_tx = k_tx_baseline * rel_strength   # RNAs/s/cell
+        m = np.zeros_like(time, dtype=float)
+        p = np.zeros_like(time, dtype=float)
+        k_tx = k_tx_baseline * rel_strength
 
         for i in range(1, len(time)):
             dm_dt = k_tx - mRNA_decay * m[i-1]
@@ -174,7 +172,60 @@ print(f"Simulated promoters ({len(uniq_proms)}): " + ", ".join(uniq_proms[:10]) 
 df.to_csv("promoter_dynamics.csv", index=False)
 print("CSV saved as promoter_dynamics.csv")
 
-# === Stacked comparison util ===
+# ============== NEW: quick summary table per promoter ==============
+def _t50_from_trace(t, y, y_target):
+    """Linear-interpolated first-passage time to y_target. Returns np.nan if never crosses."""
+    y = np.asarray(y); t = np.asarray(t)
+    if y_target <= 0 or np.all(y < y_target):
+        return np.nan
+    idx = np.searchsorted(y, y_target)  # assumes monotone increasing in this model
+    if idx == 0:
+        return float(t[0])
+    if idx >= len(y):
+        return np.nan
+    t0, t1 = t[idx-1], t[idx]
+    y0, y1 = y[idx-1], y[idx]
+    if y1 == y0:
+        return float(t1)
+    return float(t0 + (y_target - y0) * (t1 - t0) / (y1 - y0))
+
+def build_summary_table(df):
+    rows = []
+    for name, g in df.sort_values("Time_s").groupby("Promoter"):
+        g = g.copy()
+        rs = float(g["Promoter_relative_strength"].iloc[0])
+        m_eq = float(g["mRNA_eq_molecules"].iloc[0])
+        p_eq = float(g["Protein_eq_molecules"].iloc[0])
+        m_last = float(g["mRNA_molecules"].iloc[-1])
+        p_last = float(g["Protein_molecules"].iloc[-1])
+        t_arr = g["Time_s"].values
+        tm50 = _t50_from_trace(t_arr, g["mRNA_molecules"].values, 0.5*m_eq) if m_eq > 0 else np.nan
+        tp50 = _t50_from_trace(t_arr, g["Protein_molecules"].values, 0.5*p_eq) if p_eq > 0 else np.nan
+        rows.append({
+            "Promoter": name,
+            "Rel_strength": rs,
+            "k_tx_RNAs_per_s": k_tx_baseline * rs,
+            "m_eq": m_eq,
+            "p_eq": p_eq,
+            "t50_mRNA_s": tm50,
+            "t50_protein_s": tp50,
+            "mRNA_final": m_last,
+            "Protein_final": p_last,
+            "beta_per_mRNA_per_s": beta,
+            "P_bind": binding_prob
+        })
+    out = pd.DataFrame(rows).sort_values("Rel_strength", ascending=False)
+    return out
+
+summary_df = build_summary_table(df)
+summary_df.to_csv("promoter_summary.csv", index=False)
+# console preview (compact)
+with pd.option_context('display.max_rows', 20, 'display.max_columns', None, 'display.width', 120):
+    print("\nQuick summary (top 12 by strength):")
+    print(summary_df.head(12).to_string(index=False, float_format=lambda x: f"{x:.3g}"))
+print("Summary saved as promoter_summary.csv")
+
+# ================= Plots (unchanged utilities) =================
 def plot_stacked_promoter_panels(df, promoters_to_plot):
     available = sorted(set(df["Promoter"].unique()))
     keep = [p for p in promoters_to_plot if p in available]
@@ -204,7 +255,6 @@ def plot_stacked_promoter_panels(df, promoters_to_plot):
     plt.tight_layout()
     plt.show()
 
-# === Overlay comparison util ===
 def plot_overlay_two_promoters(df, p1, p2):
     assert p1 != p2, "Choose two different promoters."
     g1 = df[df["Promoter"] == p1].sort_values("Time_s")
@@ -228,37 +278,25 @@ def plot_overlay_two_promoters(df, p1, p2):
     plt.tight_layout()
     plt.show()
 
-# === NEW: One clean comparison plot (all promoters together) ===
 def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True,
-                               top_n=None, logy=False):
-    """
-    One figure with all promoters together.
-    - If top_n is set, keeps the top_n promoters by final protein level.
-    - logy=True will use log scale on y-axes (useful when strengths vary widely).
-    """
-    # choose promoters
+                               top_n=None, logy=False,
+                               legend_cols=None, legend_fontsize=8, legend_title="Promoter"):
     all_proms = sorted(df["Promoter"].unique())
     promoters = all_proms if (promoters is None) else [p for p in promoters if p in all_proms]
-
     if top_n is not None and top_n < len(promoters):
         end = df.sort_values("Time_s").groupby("Promoter")["Protein_molecules"].last()
         promoters = end.loc[promoters].sort_values(ascending=False).head(top_n).index.tolist()
-
     if not promoters:
         print("No promoters to plot.")
         return
-
-    print(f"Plotting {len(promoters)} promoters: " +
-          ", ".join(promoters[:10]) + (" …" if len(promoters) > 10 else ""))
-
-    palette = plt.get_cmap('tab20')(np.linspace(0, 1, max(3, len(promoters))))
+    print(f"Plotting {len(promoters)} promoters: "
+          + ", ".join(promoters[:12]) + (" …" if len(promoters) > 12 else ""))
+    palette = plt.cm.tab20(np.linspace(0, 1, max(3, len(promoters))))
     color_map = {p: palette[i % len(palette)] for i, p in enumerate(promoters)}
-
     n_rows = 2 if (show_mrna and show_protein) else 1
     fig, axes = plt.subplots(n_rows, 1, figsize=(10, 3.6*n_rows), sharex=True)
     if n_rows == 1:
         axes = [axes]
-
     if show_mrna:
         ax = axes[0]
         for p in promoters:
@@ -268,7 +306,6 @@ def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=
         if logy: ax.set_yscale("log")
         ax.grid(True, alpha=0.25)
         ax.set_title("All promoters — overlay (mRNA and protein)")
-
     if show_protein:
         axp = axes[-1]
         for p in promoters:
@@ -278,10 +315,14 @@ def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=
         axp.set_xlabel("Time (s)")
         if logy: axp.set_yscale("log")
         axp.grid(True, alpha=0.25)
-
+    fig.subplots_adjust(right=0.78)
+    if legend_cols is None:
+        n_proms = len(promoters)
+        legend_cols = 1 if n_proms <= 16 else (2 if n_proms <= 32 else 3)
     handles, labels = axes[-1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="center left", bbox_to_anchor=(1.02, 0.5), borderaxespad=0.)
-    fig.tight_layout(rect=(0, 0, 0.84, 1))
+    fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.80, 0.5),
+               frameon=True, borderaxespad=0.0, ncol=legend_cols, title=legend_title,
+               fontsize=legend_fontsize, title_fontsize=legend_fontsize+1)
     plt.show()
 
 # Quicklook after simulation (first 1–2 promoters)
@@ -329,12 +370,10 @@ try:
 except EOFError:
     allplot_in = ""
 if allplot_in in ("y", "yes"):
-    # backfill so df really has *all* library entries
     current = set(df["Promoter"].unique())
     missing = [k for k in promoter_strengths if k not in current]
     if missing:
         df = pd.concat([df, simulate_promoters({k: promoter_strengths[k] for k in missing})],
                        ignore_index=True)
-    # Tip: set top_n (e.g., 8) or logy=True if the figure is too busy / scales vary
     plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True,
                                top_n=None, logy=False)
