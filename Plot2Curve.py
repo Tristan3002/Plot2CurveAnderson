@@ -1,7 +1,65 @@
 # -*- coding: utf-8 -*-
+import os
+from datetime import datetime
+
+# ---------- Backend selection BEFORE importing pyplot ----------
+import matplotlib
+# Toggle this to disable GUI windows globally (or set env HEADLESS=1)
+SHOW_PLOTS = os.environ.get("HEADLESS", "0") != "1"
+
+if not SHOW_PLOTS:
+    matplotlib.use("Agg")  # headless
+# If SHOW_PLOTS is True, let Matplotlib pick an interactive backend (e.g., TkAgg)
+# You can force one by uncommenting: matplotlib.use("TkAgg")
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.lines import Line2D  # for custom legend handles
+
+# ============== Output folder & PDF collector ==============
+RUN_STAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
+OUTDIR = os.path.join(os.getcwd(), f"sim_results_{RUN_STAMP}")
+os.makedirs(OUTDIR, exist_ok=True)
+PDF_PATH = os.path.join(OUTDIR, "figures.pdf")
+_pdf = PdfPages(PDF_PATH)
+
+def _save_figure(fig, base_name, outdir=OUTDIR, pdf=_pdf):
+    """Save fig as PNG and also append to the PDF."""
+    png_path = os.path.join(outdir, f"{base_name}.png")
+    fig.savefig(png_path, dpi=300, bbox_inches='tight')
+    if pdf is not None:
+        pdf.savefig(fig, bbox_inches='tight')
+    print(f"Saved: {os.path.relpath(png_path)}")
+
+# ---------- Legend helper: put a dedicated legend panel on the right ----------
+def _panel_width_from_cols(ncols: int) -> float:
+    """
+    Return a figure-fraction width for a right-side legend panel based on cols.
+    Tuned to comfortably fit long labels without colliding with the right y-label.
+    """
+    # Wider panel as columns increase
+    return {1: 0.18, 2: 0.26, 3: 0.34, 4: 0.42}.get(int(ncols), 0.42)
+
+def _add_right_side_legend(fig, handles, labels, *, ncols=1, title="Promoters",
+                           fontsize=8, title_fontsize=9, gutter=0.06):
+    """
+    Shrinks the plotting area and adds a separate Axes at the right solely for the legend.
+    This guarantees no overlap with axis labels/ticks.
+    """
+    panel_w = _panel_width_from_cols(ncols)
+    # Make space for gutter + legend panel
+    fig.subplots_adjust(right=1 - (panel_w + gutter))
+    sp = fig.subplotpars  # current subplot geometry after adjustment
+
+    # Create legend Axes spanning the plot height
+    # Slight insets on left/right so the frame doesn't touch the canvas edge
+    leg_ax = fig.add_axes([1 - panel_w + 0.01, sp.bottom, panel_w - 0.02, sp.top - sp.bottom])
+    leg_ax.axis("off")
+    leg_ax.legend(handles, labels, loc="center left", frameon=True, ncol=ncols,
+                  title=title, fontsize=fontsize, title_fontsize=title_fontsize)
+    return leg_ax
 
 # --- Helper Functions (unchanged except noted) ---
 def calc_gc_content(seq):
@@ -100,7 +158,7 @@ promoter_strengths = {
 try:
     user_in = input('Enter promoters to test (comma-separated, e.g., "J23100,J23105"; empty = all): ').strip()
 except EOFError:
-    user_in = ""
+    user_in = ""  # environments without stdin
 
 if user_in:
     if user_in.lower() in ("all", "*"):
@@ -134,9 +192,9 @@ def simulate_promoters(promoters_dict):
     """Return a dataframe of timecourses for the supplied promoters."""
     recs = []
     for promoter, rel_strength in promoters_dict.items():
-        m = np.zeros_like(time, dtype=float)
-        p = np.zeros_like(time, dtype=float)
-        k_tx = k_tx_baseline * rel_strength
+        m = np.zeros_like(time, dtype=float)  # mRNA molecules per cell
+        p = np.zeros_like(time, dtype=float)  # protein molecules per cell
+        k_tx = k_tx_baseline * rel_strength   # RNAs/s/cell
 
         for i in range(1, len(time)):
             dm_dt = k_tx - mRNA_decay * m[i-1]
@@ -163,22 +221,23 @@ def simulate_promoters(promoters_dict):
             })
     return pd.DataFrame(recs)
 
-# --- Run initial simulation for chosen_promoters
+# --- Run initial simulation for chosen_promoters ---
 df = simulate_promoters(chosen_promoters)
 uniq_proms = sorted(df["Promoter"].unique())
 print(f"Simulated promoters ({len(uniq_proms)}): " + ", ".join(uniq_proms[:10]) + (" …" if len(uniq_proms) > 10 else ""))
 
-# --- Save CSV ---
-df.to_csv("promoter_dynamics.csv", index=False)
-print("CSV saved as promoter_dynamics.csv")
+# --- Save CSVs (dynamics) ---
+dyn_csv = os.path.join(OUTDIR, "promoter_dynamics.csv")
+df.to_csv(dyn_csv, index=False)
+print(f"CSV saved: {os.path.relpath(dyn_csv)}")
 
-# ============== NEW: quick summary table per promoter ==============
+# ============== Summary table per promoter ==============
 def _t50_from_trace(t, y, y_target):
     """Linear-interpolated first-passage time to y_target. Returns np.nan if never crosses."""
     y = np.asarray(y); t = np.asarray(t)
     if y_target <= 0 or np.all(y < y_target):
         return np.nan
-    idx = np.searchsorted(y, y_target)  # assumes monotone increasing in this model
+    idx = np.searchsorted(y, y_target)  # monotone increasing in this model
     if idx == 0:
         return float(t[0])
     if idx >= len(y):
@@ -218,15 +277,16 @@ def build_summary_table(df):
     return out
 
 summary_df = build_summary_table(df)
-summary_df.to_csv("promoter_summary.csv", index=False)
-# console preview (compact)
+sum_csv = os.path.join(OUTDIR, "promoter_summary.csv")
+summary_df.to_csv(sum_csv, index=False)
 with pd.option_context('display.max_rows', 20, 'display.max_columns', None, 'display.width', 120):
     print("\nQuick summary (top 12 by strength):")
     print(summary_df.head(12).to_string(index=False, float_format=lambda x: f"{x:.3g}"))
-print("Summary saved as promoter_summary.csv")
+print(f"CSV saved: {os.path.relpath(sum_csv)}")
 
-# ================= Plots (unchanged utilities) =================
-def plot_stacked_promoter_panels(df, promoters_to_plot):
+# ================= Plots (save PNG + PDF, and optionally SHOW) =================
+def plot_stacked_promoter_panels(df, promoters_to_plot, *, outdir=OUTDIR, pdf=_pdf,
+                                 save_name=None, show=SHOW_PLOTS):
     available = sorted(set(df["Promoter"].unique()))
     keep = [p for p in promoters_to_plot if p in available]
     missing = [p for p in promoters_to_plot if p not in available]
@@ -253,34 +313,79 @@ def plot_stacked_promoter_panels(df, promoters_to_plot):
         ax.grid(True, alpha=0.25)
     axes[-1].set_xlabel("Time (s)")
     plt.tight_layout()
-    plt.show()
+    base = save_name or ("stacked_" + "_".join(keep[:2]) + ("" if n <= 2 else "_etc"))
+    _save_figure(fig, base, outdir, pdf)
+    if show and SHOW_PLOTS:
+        plt.show()
+    else:
+        plt.close(fig)
 
-def plot_overlay_two_promoters(df, p1, p2):
-    assert p1 != p2, "Choose two different promoters."
-    g1 = df[df["Promoter"] == p1].sort_values("Time_s")
-    g2 = df[df["Promoter"] == p2].sort_values("Time_s")
-    if g1.empty or g2.empty:
-        print("One or both promoters not in dataframe.")
+# ---------- Overlay ANY number of promoters (legend panel to avoid overlap) ----------
+def plot_overlay_promoters(df, promoters, *, outdir=OUTDIR, pdf=_pdf,
+                           save_name=None, show=SHOW_PLOTS,
+                           legend_cols=None, legend_fontsize=8,
+                           legend_title="Promoters", logy_mrna=False, logy_protein=False):
+    """Overlay N promoters. Color encodes promoter; solid = mRNA (left y), dashed = protein (right y)."""
+    if isinstance(promoters, str):
+        promoters = [promoters]
+    all_avail = set(df["Promoter"].unique())
+    keep = [p for p in promoters if p in all_avail]
+    if len(keep) < 2:
+        print("Need at least two valid promoters to overlay.")
         return
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(g1["Time_s"], g1["mRNA_molecules"], color="tab:blue", label=f"mRNA ({p1})", lw=1.8)
-    ax.plot(g2["Time_s"], g2["mRNA_molecules"], color="tab:orange", label=f"mRNA ({p2})", lw=1.8, ls="--")
-    ax.set_ylabel("mRNA (molecules/cell)")
+
+    palette = plt.get_cmap("tab20")(np.linspace(0, 1, max(3, len(keep))))
+    color_map = {p: palette[i % len(palette)] for i, p in enumerate(keep)}
+
+    fig, ax = plt.subplots(figsize=(10, 5.6))
     ax2 = ax.twinx()
-    ax2.plot(g1["Time_s"], g1["Protein_molecules"], color="tab:green", label=f"Protein ({p1})", lw=1.8)
-    ax2.plot(g2["Time_s"], g2["Protein_molecules"], color="tab:red", label=f"Protein ({p2})", lw=1.8, ls="--")
-    ax2.set_ylabel("Protein (molecules/cell)")
+
+    for p in keep:
+        g = df[df["Promoter"] == p].sort_values("Time_s")
+        c = color_map[p]
+        ax.plot(g["Time_s"], g["mRNA_molecules"], color=c, lw=1.8, label=p)                # mRNA solid
+        ax2.plot(g["Time_s"], g["Protein_molecules"], color=c, lw=1.6, ls="--",
+                 label="_nolegend_")                                                       # protein dashed
+
+    ax.set_ylabel("mRNA (molecules/cell)")
+    ax2.set_ylabel("Protein (molecules/cell)", labelpad=10)
     ax.set_xlabel("Time (s)")
+    if logy_mrna: ax.set_yscale("log")
+    if logy_protein: ax2.set_yscale("log")
     ax.grid(True, alpha=0.25)
-    h1,l1=ax.get_legend_handles_labels(); h2,l2=ax2.get_legend_handles_labels()
-    ax.legend(h1+h2, l1+l2, loc="upper left")
-    plt.title(f"Overlay comparison: {p1} vs {p2}")
-    plt.tight_layout()
-    plt.show()
+    ax.set_title(f"Overlay comparison ({len(keep)} promoters)")
+
+    # Style legend (solid vs dashed) inside the axes
+    style_handles = [Line2D([0], [0], color="k", lw=2, ls="-"),
+                     Line2D([0], [0], color="k", lw=2, ls="--")]
+    ax.legend(style_handles, ["mRNA (left y)", "Protein (right y)"], loc="upper left", frameon=True)
+
+    # Promoter legend in dedicated side panel
+    if legend_cols is None:
+        n = len(keep)
+        legend_cols = 1 if n <= 16 else (2 if n <= 32 else 3)
+    prom_handles = [Line2D([0], [0], color=color_map[p], lw=2) for p in keep]
+    _add_right_side_legend(fig, prom_handles, keep,
+                           ncols=legend_cols, title=legend_title,
+                           fontsize=legend_fontsize, title_fontsize=legend_fontsize+1)
+
+    base = save_name or ("overlay_" + "_".join(keep[:6]) + ("_etc" if len(keep) > 6 else ""))
+    _save_figure(fig, base, outdir, pdf)
+    if show and SHOW_PLOTS:
+        plt.show()
+    else:
+        plt.close(fig)
+
+# Back-compat wrapper (two promoters) calls the N-promoter version
+def plot_overlay_two_promoters(df, p1, p2, **kwargs):
+    return plot_overlay_promoters(df, [p1, p2], **kwargs)
 
 def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True,
                                top_n=None, logy=False,
-                               legend_cols=None, legend_fontsize=8, legend_title="Promoter"):
+                               legend_cols=None, legend_fontsize=8, legend_title="Promoters",
+                               *, outdir=OUTDIR, pdf=_pdf, save_name="all_promoters_overlay",
+                               show=SHOW_PLOTS):
+    """All-promoter overlay with a dedicated right-side legend panel."""
     all_proms = sorted(df["Promoter"].unique())
     promoters = all_proms if (promoters is None) else [p for p in promoters if p in all_proms]
     if top_n is not None and top_n < len(promoters):
@@ -289,14 +394,15 @@ def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=
     if not promoters:
         print("No promoters to plot.")
         return
-    print(f"Plotting {len(promoters)} promoters: "
-          + ", ".join(promoters[:12]) + (" …" if len(promoters) > 12 else ""))
-    palette = plt.cm.tab20(np.linspace(0, 1, max(3, len(promoters))))
+
+    palette = plt.get_cmap("tab20")(np.linspace(0, 1, max(3, len(promoters))))
     color_map = {p: palette[i % len(palette)] for i, p in enumerate(promoters)}
+
     n_rows = 2 if (show_mrna and show_protein) else 1
     fig, axes = plt.subplots(n_rows, 1, figsize=(10, 3.6*n_rows), sharex=True)
     if n_rows == 1:
         axes = [axes]
+
     if show_mrna:
         ax = axes[0]
         for p in promoters:
@@ -306,50 +412,90 @@ def plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=
         if logy: ax.set_yscale("log")
         ax.grid(True, alpha=0.25)
         ax.set_title("All promoters — overlay (mRNA and protein)")
+
     if show_protein:
         axp = axes[-1]
         for p in promoters:
             g = df[df["Promoter"] == p].sort_values("Time_s")
             axp.plot(g["Time_s"], g["Protein_molecules"], lw=1.3, alpha=0.9, label=p, color=color_map[p])
-        axp.set_ylabel("Protein (molecules/cell)")
+        axp.set_ylabel("Protein (molecules/cell)", labelpad=10)
         axp.set_xlabel("Time (s)")
         if logy: axp.set_yscale("log")
         axp.grid(True, alpha=0.25)
-    fig.subplots_adjust(right=0.78)
-    if legend_cols is None:
-        n_proms = len(promoters)
-        legend_cols = 1 if n_proms <= 16 else (2 if n_proms <= 32 else 3)
+
+    # Unique labels/handles from bottom axis
     handles, labels = axes[-1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="center left", bbox_to_anchor=(0.80, 0.5),
-               frameon=True, borderaxespad=0.0, ncol=legend_cols, title=legend_title,
-               fontsize=legend_fontsize, title_fontsize=legend_fontsize+1)
-    plt.show()
+    uniq, seen = [], set()
+    for h, l in zip(handles, labels):
+        if l not in seen and l != "_nolegend_":
+            uniq.append((h, l)); seen.add(l)
+    handles, labels = zip(*uniq) if uniq else ([], [])
 
-# Quicklook after simulation (first 1–2 promoters)
-default_to_plot = list(chosen_promoters.keys())[:2]
-if default_to_plot:
-    plot_stacked_promoter_panels(df, default_to_plot)
+    if legend_cols is None:
+        n_proms = len(labels)
+        legend_cols = 1 if n_proms <= 16 else (2 if n_proms <= 32 else 3)
 
-# --- Optional interactive compare: stacked panels (with backfill)
-try:
-    cmp_in = input('Compare two promoters (comma-separated, e.g., "J23100,J23105"; empty = skip): ').strip()
-except EOFError:
-    cmp_in = ""
-if cmp_in:
-    cmp_proms = [s.strip() for s in cmp_in.split(",") if s.strip()]
-    current = set(df["Promoter"].unique())
-    missing = [p for p in cmp_proms if p not in current and p in promoter_strengths]
-    if missing:
-        df = pd.concat([df, simulate_promoters({k: promoter_strengths[k] for k in missing})],
-                       ignore_index=True)
-    if len(cmp_proms) >= 2:
-        plot_stacked_promoter_panels(df, cmp_proms[:2])
+    _add_right_side_legend(fig, list(handles), list(labels),
+                           ncols=legend_cols, title=legend_title,
+                           fontsize=legend_fontsize, title_fontsize=legend_fontsize+1)
+
+    _save_figure(fig, save_name, outdir, pdf)
+    if show and SHOW_PLOTS:
+        plt.show()
     else:
-        print("Need at least two valid promoter names to compare. Skipping.")
+        plt.close(fig)
 
-# --- Optional interactive compare: overlay (with backfill)
+# ---------- Paged gallery so ALL selected promoters are shown ----------
+def plot_gallery_promoters(df, promoters, per_fig=4, *, outdir=OUTDIR, pdf=_pdf, show=SHOW_PLOTS):
+    """
+    Paged gallery: stacked panels of mRNA (left y) + protein (right y)
+    for 'per_fig' promoters per figure. Saves PNGs, adds to PDF, and can show in GUI.
+    """
+    all_avail = set(df["Promoter"].unique())
+    proms = [p for p in promoters if p in all_avail]
+    if not proms:
+        print("No valid promoters to plot in gallery.")
+        return
+
+    for i in range(0, len(proms), per_fig):
+        chunk = proms[i:i+per_fig]
+        fig, axes = plt.subplots(nrows=len(chunk), ncols=1,
+                                 figsize=(9, 3.6*len(chunk)), sharex=True)
+        if len(chunk) == 1:
+            axes = [axes]
+
+        for ax, name in zip(axes, chunk):
+            g = df[df["Promoter"] == name].sort_values("Time_s")
+            ax.plot(g["Time_s"], g["mRNA_molecules"], label="mRNA", color="tab:blue", lw=1.8)
+            ax.set_ylabel("mRNA (molecules/cell)", color="tab:blue")
+            ax.tick_params(axis='y', labelcolor="tab:blue")
+            ax2 = ax.twinx()
+            ax2.plot(g["Time_s"], g["Protein_molecules"], label="Protein", color="tab:green", lw=1.8)
+            ax2.set_ylabel("Protein (molecules/cell)", color="tab:green")
+            ax2.tick_params(axis='y', labelcolor="tab:green")
+            ax.set_title(f"{name} dynamics")
+            h1,l1 = ax.get_legend_handles_labels()
+            h2,l2 = ax2.get_legend_handles_labels()
+            ax.legend(h1+h2, l1+l2, loc="upper left")
+            ax.grid(True, alpha=0.25)
+
+        axes[-1].set_xlabel("Time (s)")
+        plt.tight_layout()
+        page = i // per_fig + 1
+        _save_figure(fig, f"gallery_promoters_page_{page:02d}", outdir, pdf)
+        if show and SHOW_PLOTS:
+            plt.show()
+        else:
+            plt.close(fig)
+
+# --------- Auto-generate a quicklook (shows ALL selected promoters, paged) ----------
+selected_promoters = list(chosen_promoters.keys())
+if selected_promoters:
+    plot_gallery_promoters(df, selected_promoters, per_fig=4, show=SHOW_PLOTS)
+
+# Optional interactive compare: overlay N promoters
 try:
-    ov_in = input('Overlay two promoters on one plot (comma-separated; empty = skip): ').strip()
+    ov_in = input('Overlay promoters (comma-separated; 2+ names; empty = skip): ').strip()
 except EOFError:
     ov_in = ""
 if ov_in:
@@ -360,11 +506,12 @@ if ov_in:
         df = pd.concat([df, simulate_promoters({k: promoter_strengths[k] for k in missing})],
                        ignore_index=True)
     if len(parts) >= 2:
-        plot_overlay_two_promoters(df, parts[0], parts[1])
+        save_stub = "overlay_" + "_".join(parts[:6]) + ("_etc" if len(parts) > 6 else "")
+        plot_overlay_promoters(df, parts, save_name=save_stub, show=SHOW_PLOTS)
     else:
-        print("Need two valid promoter names for overlay. Skipping.")
+        print("Need at least two valid promoter names for overlay. Skipping.")
 
-# --- Optional: ALL-IN-ONE overlay for all promoters ---
+# Optional: ALL-IN-ONE overlay for all promoters
 try:
     allplot_in = input('Plot ALL promoters together (y/n, default n)? ').strip().lower()
 except EOFError:
@@ -376,4 +523,12 @@ if allplot_in in ("y", "yes"):
         df = pd.concat([df, simulate_promoters({k: promoter_strengths[k] for k in missing})],
                        ignore_index=True)
     plot_all_promoters_overlay(df, promoters=None, show_mrna=True, show_protein=True,
-                               top_n=None, logy=False)
+                               top_n=None, logy=False, save_name="all_promoters_overlay",
+                               show=SHOW_PLOTS)
+
+# Finalize PDF and print summary
+_pdf.close()
+print("\n========================")
+print(f"All outputs saved in: {os.path.relpath(OUTDIR)}")
+print(f"PDF of all figures:   {os.path.relpath(PDF_PATH)}")
+print("========================")
