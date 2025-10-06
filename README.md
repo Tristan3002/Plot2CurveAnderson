@@ -1,5 +1,3 @@
-Here’s a tightened, battle-tested README you can drop in your repo. I folded in the exact Windows/PowerShell steps, VS Code setup (including the `reportMissingModuleSource` fix), headless runs, and the key environment variables your script supports.
-
 ---
 
 # Gene Expression Simulator — README
@@ -8,12 +6,42 @@ A lightweight Python simulator for **transcription–translation dynamics** with
 
 ---
 
+## Deliverables (for wet-lab companion)
+
+1. **P2C “Anderson” report (sfGFP)**
+
+   * **`figures.pdf`** → contains the *Anderson k_tx ladder* figure.
+   * **`anderson_k_tx_ladder.csv`** → machine-readable **ranked ladder** with `Promoter`, `Rel_strength`, `k_tx_RNAs_per_s`, `Rank`.
+   * Use the **top/bottom ranks** as your **shortlist of promoter swaps**.
+
+2. **CSV exports for Learn → Design-2**
+
+   * **`promoter_summary.csv`** supplies per-condition values:
+
+     * **`k_tx_RNAs_per_s`** → *k_tx*
+     * **`m_eq`** → *m_eq*
+     * **`Protein_mature_eq`** (alias of p_eq) → *protein_eq*
+   * Bonus columns: timing metrics (t50/t80), maturation lag, detection threshold time, etc.
+   * **`promoter_dynamics.csv`** gives full timecourses (if trajectories are needed).
+
+> Minimal ingest example:
+>
+> ```python
+> import pandas as pd
+> s = pd.read_csv("sim_results_*/promoter_summary.csv")
+> df_design2 = s[["Promoter","k_tx_RNAs_per_s","m_eq","Protein_mature_eq"]].rename(
+>     columns={"k_tx_RNAs_per_s":"k_tx","Protein_mature_eq":"protein_eq"}
+> )
+> ```
+
+---
+
 ## Features
 
 * **Deterministic ODE model** per promoter:
 
   * mRNA: `dm/dt = k_tx − δ_m m`
-  * Protein (immature→mature): initiation-limited translation and first-order maturation
+  * Protein (immature→mature): initiation-limited translation + first-order maturation
 * **Promoter library** (Anderson J23100–J23118 + `CustomStrong`/`CustomWeak`) with relative strengths
 * **Translation throughput** with initiation ceiling & ribosome traffic cap
 * **RBS heuristics** (GC%, Tm, SD match, spacing → binding probability)
@@ -22,9 +50,9 @@ A lightweight Python simulator for **transcription–translation dynamics** with
 * **Batch outputs** (timestamped folder):
 
   * `promoter_dynamics.csv` — timecourses
-  * `promoter_summary.csv` — steady states, t50/t80, maturation lag, etc.
+  * `promoter_summary.csv` — steady states, t50/t80, maturation lag, detection time, etc.
   * `fluorescence_dashboard.csv` — slim panel for quick comparisons
-  * `anderson_k_tx_ladder.csv` — ranked ladder
+  * `anderson_k_tx_ladder.csv` — ranked ladder (shortlist source)
   * `figures.pdf` — every figure appended
   * Individual PNGs for each plot
 
@@ -76,8 +104,7 @@ HEADLESS=1 python Plot2CurveV8.py
 1. **Interpreter**: Command Palette → **Python: Select Interpreter** → pick
    `.\.venv\Scripts\python.exe` (Windows) or `./.venv/bin/python` (macOS/Linux).
 
-2. *(Optional)* **Quiet a benign Pylance warning** (e.g., compiled libs):
-   Create **.vscode/settings.json**:
+2. *(Optional)* Quiet a benign Pylance warning (compiled libs): **.vscode/settings.json**
 
    ```json
    {
@@ -90,7 +117,7 @@ HEADLESS=1 python Plot2CurveV8.py
 
    > macOS/Linux path: `"${workspaceFolder}/.venv/bin/python"`
 
-3. *(Optional)* **One-click run, headless**: **.vscode/launch.json**
+3. *(Optional)* One-click headless run: **.vscode/launch.json**
 
    ```json
    {
@@ -114,9 +141,9 @@ HEADLESS=1 python Plot2CurveV8.py
 ## Environment variables (power users)
 
 * `HEADLESS=1` — force non-interactive backend (no GUI windows)
-* `CDS_SEQ` — paste a DNA string / FASTA / file path to use a **custom CDS**
-  *(validation: optional leading ATG is allowed; length must be multiple of 3; ends with TAA/TAG/TGA)*
-* `THROTTLE=0` — disable global ribosome resource coupling (default is ON)
+* `CDS_SEQ` — DNA string / FASTA / file path for **custom CDS**
+  *(validation: optional leading ATG allowed; length multiple of 3; ends with TAA/TAG/TGA)*
+* `THROTTLE=0` — disable global ribosome resource coupling (default ON)
 * `K_R=100.0` — ribosome budget scale (mRNA molecules/cell); smaller → stronger throttling
 
 Examples:
@@ -132,7 +159,7 @@ $env:CDS_SEQ="C:\path\gene.fasta"; $env:K_R="60"; $env:HEADLESS="1"; .\.venv\Scr
 
 ## Outputs
 
-All outputs are written to a new folder like `sim_results_YYYYmmdd_HHMMSS/` in your project (or current working directory if you launch from elsewhere).
+All outputs are written to a new folder like `sim_results_YYYYmmdd_HHMMSS/` in your project.
 
 ### CSV columns (high-level)
 
@@ -142,14 +169,20 @@ All outputs are written to a new folder like `sim_results_YYYYmmdd_HHMMSS/` in y
   * `mRNA_molecules`, `Protein_immature_molecules`, `Protein_molecules`
   * `mRNA_eq_molecules`, `Protein_eq_molecules` (mature), `Steady_state_protein_molecules`
   * `Translation_rate_k_eff_per_mRNA_per_s` (β), `RBS_binding_probability`, `k_tx_RNAs_per_s`
-  * (when throttling is enabled) `M_tot_all_promoters`, `beta_eff_current`, `throttle_phi`, `K_R`, etc.
+  * (if throttling) `M_tot_all_promoters`, `beta_eff_current`, `throttle_phi`, `K_R`, …
 
 * **`promoter_summary.csv`**
 
-  * `Rel_strength`, `k_tx_RNAs_per_s`, `m_eq`, `Protein_mature_eq`, `Protein_immature_eq`
-  * `t50_mRNA_s`, `t50_protein_s` (numerical fallback if needed), `t10_p_m_s`, **`t80_p_m_s`**, `t90_p_m_s`
-  * `maturation_lag_s` (= t50_protein − t50_mRNA), `fraction_mature_at_1800s`, `AUC_p_m_0_tmax`
-  * **Detection panel**: `t_detect_s_at_thresh`, `detect_thresh_molecules` (auto-threshold ~10% of library max)
+  * **Design-2 keys:** `k_tx_RNAs_per_s` (*k_tx*), `m_eq` (*m_eq*), `Protein_mature_eq` (*protein_eq*)
+  * Extras: `Protein_immature_eq`, `t50_mRNA_s`, `t50_protein_s` (robust fallback), `t10_p_m_s`,
+    **`t80_p_m_s`**, `t90_p_m_s`, `maturation_lag_s`, `fraction_mature_at_1800s`, `AUC_p_m_0_tmax`,
+    detection panel: `t_detect_s_at_thresh`, `detect_thresh_molecules`
+
+* **Other**
+
+  * `anderson_k_tx_ladder.csv` — ranked ladder + `Rank` (shortlist source)
+  * `fluorescence_dashboard.csv` — compact view for quick comparisons
+  * `figures.pdf` — all figures appended; includes *Anderson k_tx ladder*
 
 ---
 
@@ -162,7 +195,7 @@ All outputs are written to a new folder like `sim_results_YYYYmmdd_HHMMSS/` in y
 * **Maturation stacks**: immature vs mature per promoter
 * **Maturation lag vs brightness**: scatter with top points annotated
 * **Brightness & speed bars**: steady-state brightness and **t80**
-* **Detection time vs brightness**: reaches an **absolute molecule** threshold
+* **Detection time vs brightness**: time to reach an **absolute molecule** threshold
 
 ---
 
@@ -175,7 +208,7 @@ For each promoter, transcription uses `k_tx = k_tx_baseline × rel_strength`. mR
 ## Typical tweaks
 
 * **Promoter set**: edit `promoter_strengths` or pass names at the prompt
-* **Window**: `t_max` and `dt` (dt auto-keeps stability vs `δ_m`, `α`, `k_mat`)
+* **Window**: `t_max` and `dt` (dt auto-stabilizes vs `δ_m`, `α`, `k_mat`)
 * **Biology**: `mRNA_t_half`, `doubling_time`, `aa_per_sec`, `ribosome_footprint_nt`, `k_init_max`
 * **Legend layout**: `legend_cols`, `legend_fontsize`, `gutter`, `_panel_width_from_cols`
 
@@ -191,12 +224,9 @@ For each promoter, transcription uses `k_tx = k_tx_baseline × rel_strength`. mR
   ```powershell
   cd "C:\Users\you\Projects\gene-sim"
   ```
-* **No plots on servers / WSL**
-  Set `HEADLESS=1`.
-* **No CSVs found**
-  Look inside the printed `sim_results_*` path after the run. If you launched from another directory, outputs land in that **working directory**.
-* **Long runs / no detection time**
-  Increase `t_max`, or lower the detection threshold (`frac_of_max`) in `plot_detection_time_vs_brightness`.
+* **No plots on servers / WSL** → set `HEADLESS=1`
+* **No CSVs found** → check the printed `sim_results_*` path (outputs go to the working directory)
+* **Long runs / no detection time** → increase `t_max` or lower `frac_of_max` in detection plotting
 
 ---
 
@@ -204,12 +234,12 @@ For each promoter, transcription uses `k_tx = k_tx_baseline × rel_strength`. mR
 
 ```
 .
-├── Plot2CurveV8.py            # main script
+├── Plot2CurveV8.py                 # main script
 ├── README.md
 ├── .vscode/
-│   ├── settings.json          # set interpreter + optional diagnostic tweak
-│   └── launch.json            # one-click headless run
-└── sim_results_YYYYmmdd_HHMMSS/   # generated per run
+│   ├── settings.json               # set interpreter + optional diagnostic tweak
+│   └── launch.json                 # one-click headless run
+└── sim_results_YYYYmmdd_HHMMSS/    # generated per run
 ```
 
 ---
@@ -220,4 +250,4 @@ If this tool helps your work, please cite the repository and the timestamped rel
 
 ---
 
-**Happy simming!** If something’s unclear, open an issue or ping the maintainer with your OS, Python version, and the exact terminal output.
+**Happy simming!**
