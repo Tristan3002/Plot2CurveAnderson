@@ -100,6 +100,89 @@ def compute_k_eff(cds_len_nt, aa_per_sec, footprint_nt, P_bind, k_init_max=1.0):
     k_init = k_init_max * P_bind          # s^-1 per mRNA (RBS dependent)
     return min(k_init, f_max)
 
+# ===================== Custom CDS support (NEW) =====================
+def _clean_dna(s: str) -> str:
+    return "".join(c for c in s.upper() if c in "ACGT")
+
+def _read_seq_from_path(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.read().splitlines()
+    # Allow FASTA: concatenate non-header lines
+    seq = "".join(line for line in lines if not line.startswith(">"))
+    return _clean_dna(seq)
+
+def _parse_user_cds_payload(raw: str) -> str:
+    """
+    Accepts:
+      - raw DNA sequence (with or without leading ATG),
+      - FASTA text,
+      - or a filesystem path to a file containing the sequence.
+    Returns the CDS payload *after* ATG (i.e., excludes the start codon),
+    and requires a valid stop codon at the end.
+    """
+    raw = raw.strip()
+    if not raw:
+        return ""
+
+    # If looks like a path, try to read it
+    if os.path.exists(raw):
+        seq = _read_seq_from_path(raw)
+    else:
+        # If FASTA pasted, strip headers; else treat as raw DNA
+        if ">" in raw:
+            seq = _clean_dna("".join(line for line in raw.splitlines() if not line.startswith(">")))
+        else:
+            seq = _clean_dna(raw)
+
+    if not seq:
+        return ""
+
+    # If user included ATG, strip it off to get the payload-after-start
+    if seq.startswith("ATG"):
+        seq = seq[3:]
+
+    # Basic integrity checks for payload:
+    # - multiple of 3
+    # - ends with a stop codon
+    if len(seq) % 3 != 0:
+        raise AssertionError("Custom CDS length (after removing ATG if present) is not a multiple of 3.")
+    if seq[-3:] not in {"TAA", "TAG", "TGA"}:
+        raise AssertionError("Custom CDS must end with a valid stop codon (TAA/TAG/TGA).")
+
+    return seq
+
+def _maybe_get_custom_cds(default_payload: str) -> tuple[str, str]:
+    """
+    Returns (cds_payload, cds_name). If user provides nothing or on error,
+    falls back to the provided default_payload (sfGFP).
+    """
+    # Allow env var override (useful for non-interactive runs)
+    env_cds = os.environ.get("CDS_SEQ", "").strip()
+
+    try:
+        if env_cds:
+            user = env_cds
+        else:
+            try:
+                user = input(
+                    'Custom CDS input (paste DNA/FASTA or path). '
+                    'Press ENTER to keep sfGFP: '
+                ).strip()
+            except EOFError:
+                user = ""
+
+        if user:
+            payload = _parse_user_cds_payload(user)
+            if payload:
+                print(f"Using custom CDS (length {len(payload)+3} nt including ATG).")
+                return payload, "CustomCDS"
+    except Exception as e:
+        print(f"⚠️ Custom CDS rejected: {e}. Falling back to sfGFP.")
+
+    print("Using default sfGFP CDS.")
+    return default_payload, "sfGFP"
+# ===================================================================
+
 # --- Sequence and translation setup ---
 rbs = "AAAGAGGAGAA"
 spacer = "ATACTAG"
@@ -120,13 +203,16 @@ sfGFP_cds_start = (
 rbs = rbs.upper(); spacer = spacer.upper(); start_codon = start_codon.upper()
 sfGFP_cds_start = sfGFP_cds_start.upper()
 
-# CDS integrity checks
-cds_full = start_codon + sfGFP_cds_start
+# === NEW: choose CDS payload (after ATG) ===
+cds_payload, cds_name = _maybe_get_custom_cds(sfGFP_cds_start)
+
+# CDS integrity checks (including ATG)
+cds_full = start_codon + cds_payload
 stop_codons = {"TAA", "TAG", "TGA"}
 assert len(cds_full) % 3 == 0, "CDS length is not a multiple of 3."
 assert cds_full[-3:] in stop_codons, "CDS does not end with a valid stop codon."
 
-sequence = rbs + spacer + start_codon + sfGFP_cds_start
+sequence = rbs + spacer + start_codon + cds_payload
 gc = calc_gc_content(sequence)
 tm = melting_temp(rbs + spacer)
 sd_score = check_sd_best_match(rbs)
@@ -134,8 +220,8 @@ spacing = check_spacing(len(rbs) - 1, len(rbs) + len(spacer))
 binding_prob = estimate_binding_probability(sd_score, spacing)
 
 # Lengths (bp/nt)
-mRNA_length_bp = len(spacer + start_codon + sfGFP_cds_start)
-cds_len_nt = len(start_codon + sfGFP_cds_start)
+mRNA_length_bp = len(spacer + start_codon + cds_payload)
+cds_len_nt = len(start_codon + cds_payload)
 
 # Kinetic parameters (ABSOLUTE units)
 aa_per_sec = 20                # aa/s per ribosome
@@ -183,7 +269,7 @@ alpha = np.log(2)/doubling_time
 # ABSOLUTE transcription rate baseline (RNAs/s/cell)
 k_tx_baseline = 0.02  # ~1 transcript every 50 s for baseline promoter
 
-t_max = 1000
+t_max = 5000
 dt = min(5.0, 0.02 / min(mRNA_decay, alpha))
 time = np.arange(0, t_max + dt, dt)
 
@@ -217,7 +303,8 @@ def simulate_promoters(promoters_dict):
                 "Protein_eq_molecules": p_eq,
                 "Steady_state_protein_molecules": p_eq,
                 "Translation_rate_k_eff_per_mRNA_per_s": beta,
-                "RBS_binding_probability": binding_prob
+                "RBS_binding_probability": binding_prob,
+                "k_tx_RNAs_per_s": k_tx  # NEW: per-timepoint k_tx in dynamics CSV
             })
     return pd.DataFrame(recs)
 
@@ -283,6 +370,28 @@ with pd.option_context('display.max_rows', 20, 'display.max_columns', None, 'dis
     print("\nQuick summary (top 12 by strength):")
     print(summary_df.head(12).to_string(index=False, float_format=lambda x: f"{x:.3g}"))
 print(f"CSV saved: {os.path.relpath(sum_csv)}")
+
+# --- Anderson k_tx ladder (ranked; optional shortlist) ---
+# If you want a shortlist (e.g., specific "promoter swaps [44–45]"), populate this list.
+SHORTLIST = []  # e.g., ["J23100", "J23105", "J23110"]
+ladder = summary_df[["Promoter", "Rel_strength", "k_tx_RNAs_per_s"]].copy()
+if SHORTLIST:
+    ladder = ladder[ladder["Promoter"].isin(SHORTLIST)]
+ladder = ladder.sort_values("k_tx_RNAs_per_s", ascending=False).reset_index(drop=True)
+ladder["Rank"] = ladder.index + 1
+
+ladder_csv = os.path.join(OUTDIR, "anderson_k_tx_ladder.csv")
+ladder.to_csv(ladder_csv, index=False)
+print(f"CSV saved: {os.path.relpath(ladder_csv)}")
+
+# Add a simple ladder plot to the PDF (and a PNG)
+fig, ax = plt.subplots(figsize=(8, 0.4 * max(len(ladder), 1) + 2))
+ax.barh(ladder["Promoter"], ladder["k_tx_RNAs_per_s"])
+ax.invert_yaxis()
+ax.set_xlabel("k_tx (RNAs/s/cell)")
+ax.set_title(f"Anderson k_tx ladder — {cds_name}")
+_save_figure(fig, "anderson_k_tx_ladder", OUTDIR, _pdf)
+plt.close(fig)
 
 # ================= Plots (save PNG + PDF, and optionally SHOW) =================
 def plot_stacked_promoter_panels(df, promoters_to_plot, *, outdir=OUTDIR, pdf=_pdf,
@@ -529,6 +638,7 @@ if allplot_in in ("y", "yes"):
 # Finalize PDF and print summary
 _pdf.close()
 print("\n========================")
+print(f"CDS: {cds_name} | length (incl. ATG) = {cds_len_nt} nt | GC% (UTR+CDS) = {gc:.2f}")
 print(f"All outputs saved in: {os.path.relpath(OUTDIR)}")
 print(f"PDF of all figures:   {os.path.relpath(PDF_PATH)}")
-print("========================")
+print("========================") 
