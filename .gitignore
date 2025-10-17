@@ -1,0 +1,8 @@
+﻿# Python
+__pycache__/
+*.pyc
+
+# Outputs (adjust to your project)
+data_processed/
+outputs/
+.venv/
