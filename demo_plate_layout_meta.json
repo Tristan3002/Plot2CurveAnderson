@@ -1,0 +1,5 @@
+﻿{
+  "A1": { "sample": "J23100", "medium": "LB", "temp_C": 37 },
+  "A2": { "sample": "J23101", "medium": "LB", "temp_C": 37 },
+  "A3": { "sample": "blank",  "medium": "LB", "temp_C": 37 }
+}

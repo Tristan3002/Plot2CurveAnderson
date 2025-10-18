@@ -1,0 +1,101 @@
+P2C sessions — plan once, enter as you go, analyze anytime
+==========================================================
+
+Run everything from: C:\Projects\Plot2CurveAnderson
+Assumes: p2c.py is the latest version you pasted.
+
+----------------------------------------------------------
+0) One-time: create a tiny 3-well layout (with a blank)
+----------------------------------------------------------
+Create a file named: demo_plate_layout_meta.json
+Contents:
+{
+  "A1": { "sample": "J23100", "medium": "LB", "temp_C": 37 },
+  "A2": { "sample": "J23101", "medium": "LB", "temp_C": 37 },
+  "A3": { "sample": "blank",  "medium": "LB", "temp_C": 37 }
+}
+
+----------------------------------------------------------
+1) INIT a session
+   (creates an empty session.csv, copies layout.json, writes a manifest)
+----------------------------------------------------------
+Command:
+  python .\p2c.py --init-session sessions\demo_run --layout .\demo_plate_layout_meta.json --medium LB --temp-c 37
+
+Creates:
+  sessions\demo_run\session.csv
+  sessions\demo_run\layout.json
+  sessions\demo_run\session_manifest.json
+
+----------------------------------------------------------
+2) APPEND timepoints during the experiment
+   Enter OD600, GFP RFU per well when prompted. Press Enter to skip a well.
+----------------------------------------------------------
+
+t = 0 s
+Command:
+  python .\p2c.py --append-session sessions\demo_run --time-s 0
+
+When prompted, type:
+  A1: 0.05,120
+  A2: 0.05,90
+  A3: 0.01,8
+
+t = 10 min
+Command:
+  python .\p2c.py --append-session sessions\demo_run --time-min 10
+
+When prompted, type:
+  A1: 0.20,520
+  A2: 0.20,520
+  A3: 0.02,10
+
+Tip (optional, log only a subset): add --wells A1,A2
+
+----------------------------------------------------------
+3) ANALYZE — raw (no blank subtraction)
+----------------------------------------------------------
+Command:
+  python .\p2c.py --plate .\sessions\demo_run\session.csv --layout .\sessions\demo_run\layout.json --out .\data_processed\raw
+
+Peek at first lines:
+  Get-Content .\data_processed\raw\summary.csv -TotalCount 3
+
+----------------------------------------------------------
+4) ANALYZE — with blank subtraction (recommended)
+   Per-timepoint mean of wells labeled "blank" is subtracted from OD and GFP.
+----------------------------------------------------------
+Command:
+  python .\p2c.py --plate .\sessions\demo_run\session.csv --layout .\sessions\demo_run\layout.json --blank-subtract --out .\data_processed\blank_sub
+
+Peek at first lines:
+  Get-Content .\data_processed\blank_sub\summary.csv -TotalCount 3
+
+Outputs (both modes write these):
+  - summary.csv              final F/OD, delta, fold-change, alpha, simple replicate CI
+  - tidy_timeseries.csv      all timepoints; includes od600_adj, gfp_rfu_adj, f_over_od_adj if blanks used
+  - qc_report.txt            warnings + whether blank subtraction was ON/OFF
+
+----------------------------------------------------------
+5) (Optional) Notes logger in a separate terminal
+----------------------------------------------------------
+Command:
+  python .\p2c.py --out .\sessions\demo_run --log-interval-min 10 --logger-only
+
+Writes:
+  sessions\demo_run\notes_log.csv  (timestamp, elapsed_min, note)
+
+----------------------------------------------------------
+6) Reset and rerun (clean slate)
+----------------------------------------------------------
+Commands:
+  Remove-Item .\sessions\demo_run -Recurse -Force -ErrorAction SilentlyContinue
+  Remove-Item .\data_processed -Recurse -Force -ErrorAction SilentlyContinue
+
+----------------------------------------------------------
+What the numbers mean (quick refresher)
+----------------------------------------------------------
+- OD600: proxy for cell density.
+- GFP RFU: fluorescence units from the plate reader’s GFP/FITC channel.
+- F/OD = GFP / OD600: “brightness per cell” (relative promoter activity).
+- Blank subtraction: removes media/background from both OD and GFP at each timepoint.

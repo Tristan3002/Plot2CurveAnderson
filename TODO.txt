@@ -1,0 +1,89 @@
+# =============================================================================
+# PUBLICATION-READY TODO (plates-only path; drawn ONLY from prior notes)
+# =============================================================================
+
+# Choose a target (you can do both sequentially)
+- [ ] TARGET: Software/Data Note (small, fast)
+- [ ] TARGET: Biology Results Paper (plates-only benchmark)
+
+# -----------------------------------------------------------------------------
+# SOFTWARE/DATA NOTE – MINIMUM TO PUBLISH
+# -----------------------------------------------------------------------------
+# Must-haves
+- [ ] Example dataset: keep the tiny demo + add ONE real plate run (CSV + layout JSON).
+- [ ] Docs/README: install steps, CLI usage, expected file formats (time_s, well, od600, gfp_rfu).
+- [ ] Automated tests: 2–3 simple tests (read CSV, compute F/OD, write summary).
+- [ ] License file (e.g., MIT).
+- [ ] Minimal figure: generate a plot of final F/OD by promoter with CIs.
+
+# Nice-to-haves (still lightweight)
+- [ ] Blank subtraction option in analysis.
+- [ ] Bootstrap CIs for final F/OD and fold-change.
+- [ ] Release archive (zip): code + example data + exact outputs for reproducibility.
+
+# -----------------------------------------------------------------------------
+# BIOLOGY RESULTS PAPER – PLATES-ONLY BENCHMARK
+# -----------------------------------------------------------------------------
+# Wet-lab requirements
+- [ ] Fluorescein standard curve to convert RFU → MEFL-ish units.
+      * Acceptance: calibration fit R^2 ≥ 0.995.
+- [ ] OD linearity check (e.g., LUDOX or dilution series) to define a trusted OD range.
+      * Acceptance: analyze only within the linear regime (e.g., OD600 ≤ 0.8).
+- [ ] Controls on every plate:
+      * Media blanks
+      * No-GFP strain
+      * Reference promoter (e.g., J23101) for cross-day normalization
+- [ ] Replication: ≥ 3 independent days (biological), 2–3 technical reps each; randomized plate layouts.
+
+# Analysis & reporting
+- [ ] Compute effect sizes with 95% confidence intervals (not just means).
+- [ ] Use reference promoter for cross-day normalization; report cross-day variability.
+- [ ] Growth-burden check: report α (growth rate) alongside expression metrics.
+
+# Acceptance criteria (to claim “publication-grade”)
+- [ ] Fluorescein fit R^2 ≥ 0.995.
+- [ ] OD readings used are within the linear range (e.g., ≤ 0.8).
+- [ ] Reference promoter cross-day CV ≤ 10–15%.
+- [ ] Figures and tables clearly report effect sizes with CIs and burden check.
+
+# Deliverables to include with submission
+- [ ] Reproducible figure(s): final MEFL/OD by promoter (and by condition if applicable), with CIs.
+- [ ] Dataset bundle (code + raw CSVs + layout JSONs + outputs) ready for sharing/archival.
+
+
+# -----------------------------------------------------------------------------
+# FUTURE EXTENSION: Optional qPCR support (two-assay: plate + qPCR)
+#
+# Why:
+#   Add a transcription-level anchor so promoter “strength” (GFP/OD) can be
+#   interpreted alongside mRNA abundance. This helps separate transcription
+#   (k_tx) from downstream effects (translation, maturation, growth).
+#
+# User-facing plan (no behavior change until implemented):
+#   • CLI: add --qpcr PATH [--qpcr-ref SAMPLE]
+#   • Input CSV (minimal, case-insensitive headers):
+#       sample, Ct_gfp, Ct_ref1, Ct_ref2   # Ct_ref2 optional
+#   • Computations per sample:
+#       ΔCt   = Ct_gfp − mean(Ct_ref1, Ct_ref2)   (or Ct_ref1 alone if only one)
+#       ΔΔCt  = ΔCt − ΔCt_refSample               (refSample chosen or auto)
+#       rel_expr = 2^(−ΔΔCt)
+#   • Merge rule:
+#       Left-join qPCR metrics onto the plate summary by 'sample' and add:
+#         qpcr_rel_expr, qpcr_ddct
+#
+# Minimal QA (MIQE-lite):
+#   • Prefer 2 housekeeping genes (geometric/arith. mean acceptable at MVP level)
+#   • Flag missing Ct or out-of-range Ct values in a QC note (no hard fail)
+#
+# Acceptance criteria for “done”:
+#   • New CLI flags exist and are optional; no change to current behavior when omitted
+#   • Summary CSV gains qpcr_rel_expr and qpcr_ddct when --qpcr is provided
+#   • A short QC section reports missing/invalid Ct rows (count + examples)
+#
+# Non-goals (for this MVP):
+#   • No Bayesian modeling yet; no primer efficiency correction; no fold-change plots
+#
+# Backwards compatibility:
+#   • If --qpcr is not provided, the tool behaves exactly as it does today.
+# -----------------------------------------------------------------------------
+# TODO(qPCR): when implemented, merge qpcr metrics into 'summary' here (see FUTURE EXTENSION above).
